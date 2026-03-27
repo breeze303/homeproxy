@@ -8,6 +8,7 @@
 'use strict';
 
 import { access, error, lstat, popen, readfile, writefile } from 'fs';
+import { cursor } from 'uci';
 
 /* Kanged from ucode/luci */
 function shellquote(s) {
@@ -138,6 +139,197 @@ const methods = {
 			}
 
 			return { result: (system(`/usr/bin/wget --spider -qT3 ${url} 2>"/dev/null"`, 3100) === 0) };
+		}
+	},
+
+	node_latency_test: {
+		args: { node: 'node' },
+		call: function(req) {
+			const error_codes = {
+				invalid_node: 'invalid_node',
+				icmp_probe_unavailable: 'icmp_probe_unavailable',
+				tcp_probe_unavailable: 'tcp_probe_unavailable',
+				icmp_timeout: 'icmp_timeout',
+				tcp_timeout: 'tcp_timeout',
+				icmp_failed: 'icmp_failed',
+				tcp_failed: 'tcp_failed',
+				probe_timeout: 'probe_timeout',
+				backend_execution_failed: 'backend_execution_failed',
+				connection_failed: 'connection_failed',
+				probe_failed: 'probe_failed'
+			};
+			const probe_timeout_s = 3;
+			const probe_timeout_ms = probe_timeout_s * 1000;
+			const probe_system_timeout_ms = probe_timeout_ms + 250;
+
+			const formatResult = (node, state, latency_ms, err, extras) => ({
+				node,
+				state,
+				latency_ms,
+				measured_at: time(),
+				error: err,
+				icmp_latency_ms: (extras && extras.icmp_latency_ms != null) ? extras.icmp_latency_ms : null,
+				tcp_latency_ms: (extras && extras.tcp_latency_ms != null) ? extras.tcp_latency_ms : null,
+				icmp_error: (extras && extras.icmp_error) ? extras.icmp_error : null,
+				tcp_error: (extras && extras.tcp_error) ? extras.tcp_error : null
+			});
+
+			const monotonicMs = () => {
+				const uptime = trim(readfile('/proc/uptime') || '');
+				const parsed = match(uptime, /^([0-9]+)(\.([0-9]+))?/);
+
+				if (!parsed)
+					return null;
+
+				const sec = int(parsed[1]);
+				const frac = ((parsed[3] || '') + '000');
+				const msec = int(substr(frac, 0, 3));
+
+				return sec * 1000 + msec;
+			};
+
+			const node = trim(req.args?.node || '') || null;
+			if (!node)
+				return formatResult(null, 'error', null, {
+					code: error_codes.invalid_node,
+					message: 'missing node section id'
+				});
+
+			const uci = cursor();
+			uci.load('homeproxy');
+
+			const section = uci.get_all('homeproxy', node);
+			if (!section || section['.type'] !== 'node')
+				return formatResult(node, 'error', null, {
+					code: error_codes.invalid_node,
+					message: 'node section does not exist or is not a node section'
+				});
+
+			const address = trim(section.address || '');
+			const port = int(section.port || '0');
+			const port_str = sprintf('%d', port);
+			if (!address || port <= 0 || port > 65535)
+				return formatResult(node, 'error', null, {
+					code: error_codes.invalid_node,
+					message: 'node address or port is invalid'
+				});
+
+			const ping = access('/bin/ping') ? '/bin/ping' : (access('/usr/bin/ping') ? '/usr/bin/ping' : null);
+			const netcat = access('/usr/bin/nc') ? '/usr/bin/nc' : (access('/bin/nc') ? '/bin/nc' : null);
+
+			const runProbe = (command, timeout_ms) => {
+				const started_ms = monotonicMs();
+				const probe_exit = system(command, timeout_ms);
+				const ended_ms = monotonicMs();
+				let latency_ms = null;
+				if (started_ms !== null && ended_ms !== null && ended_ms >= started_ms)
+					latency_ms = ended_ms - started_ms;
+				return { probe_exit, latency_ms };
+			};
+
+			let icmp_latency_ms = null;
+			let tcp_latency_ms = null;
+			let icmp_error = null;
+			let tcp_error = null;
+
+			if (!ping) {
+				icmp_error = {
+					code: error_codes.icmp_probe_unavailable,
+					message: 'missing ping executable for ICMP probe'
+				};
+			}
+			else {
+				const result = runProbe(
+					`${ping} -c 1 -W ${probe_timeout_s} ${shellquote(address)} >/dev/null 2>/dev/null`,
+					probe_system_timeout_ms
+				);
+
+				if (result.probe_exit === 0)
+					icmp_latency_ms = (result.latency_ms !== null) ? result.latency_ms : 0;
+				else if (result.probe_exit === -1 || (result.latency_ms !== null && result.latency_ms >= probe_timeout_ms))
+					icmp_error = {
+						code: error_codes.icmp_timeout,
+						message: `ICMP ping timeout after ${probe_timeout_s}s`
+					};
+				else if (result.probe_exit === 127)
+					icmp_error = {
+						code: error_codes.backend_execution_failed,
+						message: 'ICMP ping command execution failed'
+					};
+				else
+					icmp_error = {
+						code: error_codes.icmp_failed,
+						message: `ICMP ping failed with exit code ${result.probe_exit}`
+					};
+			}
+
+			if (!netcat) {
+				tcp_error = {
+					code: error_codes.tcp_probe_unavailable,
+					message: 'missing netcat executable for TCP probe'
+				};
+			}
+			else {
+				const result = runProbe(
+					`${netcat} -w ${probe_timeout_s} ${shellquote(address)} ${shellquote(port_str)} </dev/null >/dev/null 2>/dev/null`,
+					probe_system_timeout_ms
+				);
+
+				if (result.probe_exit === 0)
+					tcp_latency_ms = (result.latency_ms !== null) ? result.latency_ms : 0;
+				else if (result.probe_exit === -1 || (result.latency_ms !== null && result.latency_ms >= probe_timeout_ms))
+					tcp_error = {
+						code: error_codes.tcp_timeout,
+						message: `TCP ping timeout after ${probe_timeout_s}s`
+					};
+				else if (result.probe_exit === 127)
+					tcp_error = {
+						code: error_codes.backend_execution_failed,
+						message: 'TCP ping command execution failed'
+					};
+				else if (result.probe_exit === 1)
+					tcp_error = {
+						code: error_codes.connection_failed,
+						message: `TCP connection probe failed with exit code ${result.probe_exit}`
+					};
+				else
+					tcp_error = {
+						code: error_codes.tcp_failed,
+						message: `TCP ping failed with exit code ${result.probe_exit}`
+					};
+			}
+
+			const top_latency_ms = (tcp_latency_ms !== null) ? tcp_latency_ms : icmp_latency_ms;
+
+			if (icmp_latency_ms !== null || tcp_latency_ms !== null)
+				return formatResult(node, 'success', top_latency_ms, null, {
+					icmp_latency_ms,
+					tcp_latency_ms,
+					icmp_error,
+					tcp_error
+				});
+
+			if ((icmp_error?.code === error_codes.icmp_timeout || icmp_error?.code === error_codes.icmp_probe_unavailable) &&
+				(tcp_error?.code === error_codes.tcp_timeout || tcp_error?.code === error_codes.tcp_probe_unavailable))
+				return formatResult(node, 'timeout', null, {
+					code: error_codes.probe_timeout,
+					message: `all probes timed out after ${probe_timeout_s}s`
+				}, {
+					icmp_latency_ms,
+					tcp_latency_ms,
+					icmp_error,
+					tcp_error
+				});
+
+			return formatResult(node, 'error', null, tcp_error || icmp_error || {
+				code: error_codes.probe_failed,
+				message: 'all probes failed'
+			}, {
+				icmp_latency_ms,
+				tcp_latency_ms,
+				icmp_error,
+				tcp_error
+			});
 		}
 	},
 
