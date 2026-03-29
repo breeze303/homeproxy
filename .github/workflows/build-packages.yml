@@ -74,6 +74,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          path: luci-app-homeproxy # <--- 关键修改：将代码拉取到这个子目录中，满足 OpenWrt 的包结构要求
 
       - name: Get node-empty
         run: |
