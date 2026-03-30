@@ -962,6 +962,9 @@ if (!isEmpty(main_node)) {
 /* Experimental start */
 if (routing_mode in ['bypass_mainland_china', 'custom']) {
 	config.experimental = {
+		clash_api: {
+			external_controller: '127.0.0.1:9090'
+		},
 		cache_file: {
 			enabled: true,
 			path: RUN_DIR + '/cache.db',

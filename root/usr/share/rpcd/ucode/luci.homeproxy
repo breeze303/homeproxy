@@ -142,6 +142,74 @@ const methods = {
 		}
 	},
 
+	current_node_get: {
+		call: function() {
+			const uci = cursor();
+			uci.load('homeproxy');
+
+			const formatNode = (section_id, fallback_name) => {
+				if (!section_id || section_id in ['nil', 'same'])
+					return { id: section_id, label: fallback_name || section_id, type: null };
+
+				const section = uci.get_all('homeproxy', section_id);
+				if (!section || section['.type'] !== 'node')
+					return { id: section_id, label: fallback_name || section_id, type: null };
+
+				const address = trim(section.override_address || section.address || '');
+				const port = trim(section.override_port || section.port || '');
+				const label = trim(section.label || '') || ((address && port) ? `${address}:${port}` : section_id);
+				return {
+					id: section_id,
+					label,
+					type: section.type || null
+				};
+			};
+
+			const main_node = trim(uci.get('homeproxy', 'config', 'main_node') || 'nil');
+			if (main_node !== 'urltest')
+				return {
+					mode: main_node,
+					active: formatNode(main_node, (main_node === 'nil') ? 'Disable' : null),
+					error: null
+				};
+
+			const fd = popen('/usr/bin/wget -qO- http://127.0.0.1:9090/proxies/main-out 2>"/dev/null"');
+			if (!fd)
+				return {
+					mode: 'urltest',
+					active: { id: 'urltest', label: 'URLTest', type: 'urltest' },
+					error: 'clash_api_unavailable'
+				};
+
+			let payload = '', line;
+			for (line = fd.read('line'); length(line); line = fd.read('line'))
+				payload += line;
+			fd.close();
+
+			let data = null;
+			try {
+				data = json(payload);
+			} catch (e) {}
+
+			const tag = trim(data?.now || '');
+			if (!tag)
+				return {
+					mode: 'urltest',
+					active: { id: 'urltest', label: 'URLTest', type: 'urltest' },
+					error: 'missing_current_proxy'
+				};
+
+			const matched = match(tag, /^cfg-(.*)-out$/);
+			const section_id = matched ? matched[1] : tag;
+
+			return {
+				mode: 'urltest',
+				active: formatNode(section_id, tag),
+				error: null
+			};
+		}
+	},
+
 	node_latency_test: {
 		args: { node: 'node' },
 		call: function(req) {
