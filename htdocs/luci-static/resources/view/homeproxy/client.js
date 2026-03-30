@@ -38,6 +38,12 @@ const callWriteDomainList = rpc.declare({
 	expect: { '': {} }
 });
 
+const callCurrentNode = rpc.declare({
+	object: 'luci.homeproxy',
+	method: 'current_node_get',
+	expect: { '': {} }
+});
+
 function getServiceStatus() {
 	return L.resolveDefault(callServiceList('homeproxy'), {}).then((res) => {
 		let isRunning = false;
@@ -48,13 +54,18 @@ function getServiceStatus() {
 	});
 }
 
-function renderStatus(isRunning, version) {
+function renderStatus(isRunning, version, currentNode) {
 	let spanTemp = '<em><span style="color:%s"><strong>%s (sing-box v%s) %s</strong></span></em>';
 	let renderHTML;
+	let statusColor = isRunning ? 'green' : 'red';
+	let nodeColor = '#1e90ff';
 	if (isRunning)
-		renderHTML = spanTemp.format('green', _('HomeProxy'), version, _('RUNNING'));
+		renderHTML = spanTemp.format(statusColor, _('HomeProxy'), version, _('RUNNING'));
 	else
-		renderHTML = spanTemp.format('red', _('HomeProxy'), version, _('NOT RUNNING'));
+		renderHTML = spanTemp.format(statusColor, _('HomeProxy'), version, _('NOT RUNNING'));
+
+	if (currentNode)
+		renderHTML += '<em style="margin-left:8px"><span style="color:%s"><strong>%s</strong></span></em>'.format(nodeColor, currentNode);
 
 	return renderHTML;
 }
@@ -104,11 +115,26 @@ return view.extend({
 		s = m.section(form.TypedSection);
 		s.render = function () {
 			poll.add(function () {
-				return L.resolveDefault(getServiceStatus()).then((res) => {
+				return Promise.all([
+					L.resolveDefault(getServiceStatus(), false),
+					L.resolveDefault(callCurrentNode(), null)
+				]).then((res) => {
+					let isRunning = res[0],
+					    current = res[1],
+					    current_label = null;
+
+					if (current?.mode === 'urltest') {
+						let active = current.active || {};
+						if (active?.id && active.id !== 'urltest')
+							current_label = _('URLTest: %s').format(proxy_nodes[active.id] || active.label || active.id);
+						else
+							current_label = _('URLTest');
+					}
+
 					let view = document.getElementById('service_status');
-					view.innerHTML = renderStatus(res, features.version);
+					view.innerHTML = renderStatus(isRunning, features.version, current_label);
+					});
 				});
-			});
 
 			return E('div', { class: 'cbi-section', id: 'status_bar' }, [
 					E('p', { id: 'service_status' }, _('Collecting data...'))
