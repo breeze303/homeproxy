@@ -60,6 +60,8 @@ let main_node, main_udp_node, dedicated_udp_node, default_outbound, default_outb
     dns_client_subnet, cache_file_store_rdrc, cache_file_rdrc_timeout, direct_domain_list,
     proxy_domain_list;
 
+const sniff_inbounds = [];
+
 if (routing_mode !== 'custom') {
 	main_node = uci.get(uciconfig, ucimain, 'main_node') || 'nil';
 	main_udp_node = uci.get(uciconfig, ucimain, 'main_udp_node') || 'nil';
@@ -605,10 +607,9 @@ push(config.inbounds, {
 	listen: '::',
 	listen_port: int(mixed_port),
 	udp_timeout: strToTime(udp_timeout),
-	sniff: true,
-	sniff_override_destination: strToBool(sniff_override),
 	set_system_proxy: false
 });
+push(sniff_inbounds, 'mixed-in');
 
 if (match(proxy_mode, /redirect/))
 	push(config.inbounds, {
@@ -616,10 +617,10 @@ if (match(proxy_mode, /redirect/))
 		tag: 'redirect-in',
 
 		listen: '::',
-		listen_port: int(redirect_port),
-		sniff: true,
-		sniff_override_destination: strToBool(sniff_override)
+		listen_port: int(redirect_port)
 	});
+if (match(proxy_mode, /redirect/))
+	push(sniff_inbounds, 'redirect-in');
 if (match(proxy_mode, /tproxy/))
 	push(config.inbounds, {
 		type: 'tproxy',
@@ -628,10 +629,10 @@ if (match(proxy_mode, /tproxy/))
 		listen: '::',
 		listen_port: int(tproxy_port),
 		network: 'udp',
-		udp_timeout: strToTime(udp_timeout),
-		sniff: true,
-		sniff_override_destination: strToBool(sniff_override)
+		udp_timeout: strToTime(udp_timeout)
 	});
+if (match(proxy_mode, /tproxy/))
+	push(sniff_inbounds, 'tproxy-in');
 if (match(proxy_mode, /tun/))
 	push(config.inbounds, {
 		type: 'tun',
@@ -643,10 +644,10 @@ if (match(proxy_mode, /tun/))
 		auto_route: false,
 		endpoint_independent_nat: strToBool(endpoint_independent_nat),
 		udp_timeout: strToTime(udp_timeout),
-		stack: tcpip_stack,
-		sniff: true,
-		sniff_override_destination: strToBool(sniff_override)
+		stack: tcpip_stack
 	});
+if (match(proxy_mode, /tun/))
+	push(sniff_inbounds, 'tun-in');
 /* Inbound end */
 
 /* Outbound start */
@@ -795,17 +796,17 @@ config.route = {
 			inbound: 'dns-in',
 			action: 'hijack-dns'
 		}
-		/*
-		 * leave for sing-box 1.13.0
-		 * {
-		 * 	action: 'sniff'
-		 * }
-		 */
 	],
 	rule_set: [],
 	auto_detect_interface: isEmpty(default_interface) ? true : null,
 	default_interface: default_interface
 };
+
+for (let i in sniff_inbounds)
+	push(config.route.rules, {
+		inbound: sniff_inbounds[i],
+		action: 'sniff'
+	});
 
 /* Routing rules */
 if (!isEmpty(main_node)) {
