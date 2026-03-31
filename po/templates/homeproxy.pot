@@ -4663,6 +4663,14 @@ msgstr ""
 msgid "Latency"
 msgstr ""
 
+#: htdocs/luci-static/resources/view/homeproxy/node.js:1610
+msgid "Latency test mode"
+msgstr ""
+
+#: htdocs/luci-static/resources/view/homeproxy/node.js:1611
+msgid "Choose which method node latency tests use."
+msgstr ""
+
 #: .github/tmp.3B2WlMxw6Y/luci-app-homeproxy/www/luci-static/resources/view/homeproxy/node.js:743
 #: .github/tmp.3B2WlMxw6Y/luci-app-homeproxy/www/luci-static/resources/view/homeproxy/server.js:392
 #: .github/tmp.5ZjF7otiBL/luci-app-homeproxy/www/luci-static/resources/view/homeproxy/node.js:935
@@ -8536,6 +8544,14 @@ msgstr ""
 #: htdocs/luci-static/resources/view/homeproxy/client.js:996
 #: htdocs/luci-static/resources/view/homeproxy/client.js:1162
 msgid "System DNS"
+msgstr ""
+
+#: htdocs/luci-static/resources/view/homeproxy/node.js:1610
+msgid "ICMP"
+msgstr ""
+
+#: htdocs/luci-static/resources/view/homeproxy/node.js:1612
+msgid "Real Proxy"
 msgstr ""
 
 #: .github/tmp.3B2WlMxw6Y/luci-app-homeproxy/www/luci-static/resources/view/homeproxy/client.js:638
