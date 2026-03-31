@@ -18,7 +18,7 @@
 const callNodeLatencyTest = rpc.declare({
 	object: 'luci.homeproxy',
 	method: 'node_latency_test',
-	params: ['node'],
+	params: ['node', 'mode'],
 	expect: { '': {} }
 });
 
@@ -405,6 +405,44 @@ const NODE_LATENCY_ROW_STATES = Object.freeze({
 });
 
 const NODE_LATENCY_ROW_STATE_VALUES = Object.freeze(Object.values(NODE_LATENCY_ROW_STATES));
+const NODE_LATENCY_TEST_MODES = Object.freeze([ 'icmp', 'tcp', 'real_proxy' ]);
+
+function normalizeNodeLatencyTestMode(mode) {
+	return NODE_LATENCY_TEST_MODES.includes(mode) ? mode : 'tcp';
+}
+
+function resolveNodeLatencyResultByMode(result, mode) {
+	let active_mode = normalizeNodeLatencyTestMode(mode || result?.mode);
+	let active_latency_ms = (result && result.latency_ms != null) ? result.latency_ms : null;
+	let active_error = (result && result.error) ? result.error : null;
+	let active_state = result?.state;
+
+	if (active_mode === 'icmp') {
+		if (result && result.icmp_latency_ms != null)
+			active_latency_ms = result.icmp_latency_ms;
+		if (result && result.icmp_error)
+			active_error = result.icmp_error;
+	} else if (active_mode === 'tcp') {
+		if (result && result.tcp_latency_ms != null)
+			active_latency_ms = result.tcp_latency_ms;
+		if (result && result.tcp_error)
+			active_error = result.tcp_error;
+	}
+
+	if (active_error?.code?.endsWith('_timeout'))
+		active_state = NODE_LATENCY_ROW_STATES.TIMEOUT;
+	else if (active_error)
+		active_state = NODE_LATENCY_ROW_STATES.ERROR;
+	else if (active_latency_ms != null)
+		active_state = NODE_LATENCY_ROW_STATES.SUCCESS;
+
+	return {
+		mode: active_mode,
+		state: active_state,
+		latency_ms: active_latency_ms,
+		error: active_error
+	};
+}
 
 function getNodeLatencyErrorText(error_code) {
 	switch (error_code) {
@@ -491,16 +529,21 @@ function parseNodeLatencySectionId(widget_id) {
 function createNodeLatencyRowStateModel() {
 	let rows = Object.create(null);
 
-	const buildRowState = (state, result) => ({
+	const buildRowState = (state, result, mode) => {
+		let resolved_result = resolveNodeLatencyResultByMode(result, mode);
+
+		return {
 		state: state,
-		latency_ms: (result && result.latency_ms != null) ? result.latency_ms : null,
+		mode: resolved_result.mode,
+		latency_ms: resolved_result.latency_ms,
 		icmp_latency_ms: (result && result.icmp_latency_ms != null) ? result.icmp_latency_ms : null,
 		tcp_latency_ms: (result && result.tcp_latency_ms != null) ? result.tcp_latency_ms : null,
 		measured_at: (result && result.measured_at) ? result.measured_at : null,
-		error: (result && result.error) ? result.error : null,
+		error: resolved_result.error,
 		icmp_error: (result && result.icmp_error) ? result.icmp_error : null,
 		tcp_error: (result && result.tcp_error) ? result.tcp_error : null
-	});
+		};
+	};
 
 	const normalizeState = (state) => {
 		if (NODE_LATENCY_ROW_STATE_VALUES.includes(state))
@@ -511,10 +554,10 @@ function createNodeLatencyRowStateModel() {
 
 	const ensure = (section_id) => {
 		if (!section_id)
-			return buildRowState(NODE_LATENCY_ROW_STATES.UNTESTED);
+			return buildRowState(NODE_LATENCY_ROW_STATES.UNTESTED, null, 'tcp');
 
 		if (!rows[section_id])
-			rows[section_id] = buildRowState(NODE_LATENCY_ROW_STATES.UNTESTED);
+			rows[section_id] = buildRowState(NODE_LATENCY_ROW_STATES.UNTESTED, null, 'tcp');
 
 		return rows[section_id];
 	};
@@ -524,20 +567,21 @@ function createNodeLatencyRowStateModel() {
 
 		get: (section_id) => ensure(section_id),
 
-		set: (section_id, state, result) => {
+		set: (section_id, state, result, mode) => {
 			if (!section_id)
 				return null;
 
-			rows[section_id] = buildRowState(normalizeState(state), result);
+			rows[section_id] = buildRowState(normalizeState(state), result, mode);
 			return rows[section_id];
 		},
 
-		setFromProbeResult: (section_id, result) => {
+		setFromProbeResult: (section_id, result, mode) => {
 			if (!section_id)
 				return null;
 
-			let state = (result && result.state) ? normalizeState(result.state) : NODE_LATENCY_ROW_STATES.ERROR;
-			rows[section_id] = buildRowState(state, result);
+			let resolved_result = resolveNodeLatencyResultByMode(result, mode);
+			let state = resolved_result.state ? normalizeState(resolved_result.state) : NODE_LATENCY_ROW_STATES.ERROR;
+			rows[section_id] = buildRowState(state, result, mode);
 			return rows[section_id];
 		},
 
@@ -574,11 +618,27 @@ function renderNodeSettings(section, data, features, main_node, routing_mode, no
 	s.getNodeLatencyRowState = function(section_id) {
 		return node_latency_row_state.get(section_id);
 	}
-	s.setNodeLatencyRowState = function(section_id, state, result) {
-		return node_latency_row_state.set(section_id, state, result);
+	s.getNodeLatencyTestMode = function() {
+		let mode_option = this.map.lookupOption('latency_test_mode', 'subscription')?.[0];
+		let mode_value = mode_option ? mode_option.formvalue('subscription') : uci.get(data[0], 'subscription', 'latency_test_mode');
+
+		return normalizeNodeLatencyTestMode(mode_value);
 	}
-	s.setNodeLatencyRowStateFromProbeResult = function(section_id, result) {
-		return node_latency_row_state.setFromProbeResult(section_id, result);
+	s.syncNodeLatencyTestMode = function(mode) {
+		let normalized_mode = normalizeNodeLatencyTestMode(mode);
+		let saved_mode = normalizeNodeLatencyTestMode(uci.get(data[0], 'subscription', 'latency_test_mode'));
+
+		if (saved_mode === normalized_mode)
+			return Promise.resolve(normalized_mode);
+
+		uci.set(data[0], 'subscription', 'latency_test_mode', normalized_mode);
+		return uci.save().then(() => normalized_mode);
+	}
+	s.setNodeLatencyRowState = function(section_id, state, result, mode) {
+		return node_latency_row_state.set(section_id, state, result, mode);
+	}
+	s.setNodeLatencyRowStateFromProbeResult = function(section_id, result, mode) {
+		return node_latency_row_state.setFromProbeResult(section_id, result, mode);
 	}
 	s.refreshNodeLatencyRow = function(section_id) {
 		let row_state = this.getNodeLatencyRowState(section_id);
@@ -598,26 +658,29 @@ function renderNodeSettings(section, data, features, main_node, routing_mode, no
 	}
 
 	s.handleNodeLatencyTest = function(section_id) {
-		this.setNodeLatencyRowState(section_id, NODE_LATENCY_ROW_STATES.TESTING);
+		let mode = this.getNodeLatencyTestMode();
+		this.setNodeLatencyRowState(section_id, NODE_LATENCY_ROW_STATES.TESTING, null, mode);
 		this.refreshNodeLatencyRow(section_id);
 
-		return L.resolveDefault(callNodeLatencyTest(section_id), null).then((result) => {
+		return this.syncNodeLatencyTestMode(mode).then((mode) => L.resolveDefault(callNodeLatencyTest(section_id, mode), null).then((result) => {
 			if (result?.node === section_id)
-				this.setNodeLatencyRowStateFromProbeResult(section_id, result);
+				this.setNodeLatencyRowStateFromProbeResult(section_id, result, mode);
 			else
 				this.setNodeLatencyRowState(section_id, NODE_LATENCY_ROW_STATES.ERROR, {
+					mode: mode,
 					error: {
 						code: 'invalid_response',
 						message: 'unexpected node latency response'
 					}
-				});
-		}).catch((err) => {
+				}, mode);
+		})).catch((err) => {
 			this.setNodeLatencyRowState(section_id, NODE_LATENCY_ROW_STATES.ERROR, {
+				mode: mode,
 				error: {
 					code: 'rpc_failed',
 					message: String(err)
 				}
-			});
+			}, mode);
 		}).then(() => {
 			this.refreshNodeLatencyRow(section_id);
 		});
@@ -1604,6 +1667,14 @@ return view.extend({
 
 		o = s.taboption('subscription', form.Flag, 'update_via_proxy', _('Update via proxy'),
 			_('Update subscriptions via proxy.'));
+		o.rmempty = false;
+
+		o = s.taboption('subscription', form.ListValue, 'latency_test_mode', _('Latency test mode'),
+			_('Choose which method node latency tests use.'));
+		o.value('icmp', _('ICMP'));
+		o.value('tcp', _('TCP'));
+		o.value('real_proxy', _('Real Proxy'));
+		o.default = 'tcp';
 		o.rmempty = false;
 
 		o = s.taboption('subscription', form.DynamicList, 'subscription_url', _('Subscription URL-s'),

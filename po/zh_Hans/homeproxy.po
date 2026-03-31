@@ -24,7 +24,7 @@ msgstr "%s 日志"
 #: .github/tmp.9RUYUsT2lk/luci-app-homeproxy/www/luci-static/resources/view/homeproxy/node.js:417
 #: htdocs/luci-static/resources/view/homeproxy/node.js:438
 msgid "%s ms"
-msgstr ""
+msgstr "%s 毫秒"
 
 #: .github/tmp.3B2WlMxw6Y/luci-app-homeproxy/www/luci-static/resources/view/homeproxy/node.js:1456
 #: .github/tmp.5ZjF7otiBL/luci-app-homeproxy/www/luci-static/resources/view/homeproxy/node.js:1651
@@ -4688,7 +4688,15 @@ msgstr "标签"
 #: .github/tmp.9RUYUsT2lk/luci-app-homeproxy/www/luci-static/resources/view/homeproxy/node.js:573
 #: htdocs/luci-static/resources/view/homeproxy/node.js:594
 msgid "Latency"
-msgstr ""
+msgstr "延迟"
+
+#: htdocs/luci-static/resources/view/homeproxy/node.js:1610
+msgid "Latency test mode"
+msgstr "延迟测试模式"
+
+#: htdocs/luci-static/resources/view/homeproxy/node.js:1611
+msgid "Choose which method node latency tests use."
+msgstr "选择节点延迟测试使用的方法。"
 
 #: .github/tmp.3B2WlMxw6Y/luci-app-homeproxy/www/luci-static/resources/view/homeproxy/node.js:743
 #: .github/tmp.3B2WlMxw6Y/luci-app-homeproxy/www/luci-static/resources/view/homeproxy/server.js:392
@@ -8449,7 +8457,7 @@ msgstr "订阅"
 #: .github/tmp.9RUYUsT2lk/luci-app-homeproxy/www/luci-static/resources/view/homeproxy/node.js:417
 #: htdocs/luci-static/resources/view/homeproxy/node.js:438
 msgid "Success"
-msgstr ""
+msgstr "成功"
 
 #: .github/tmp.3B2WlMxw6Y/luci-app-homeproxy/www/luci-static/resources/view/homeproxy/node.js:1273
 #: .github/tmp.5ZjF7otiBL/luci-app-homeproxy/www/luci-static/resources/view/homeproxy/node.js:1468
@@ -8581,6 +8589,14 @@ msgstr "系统"
 #: htdocs/luci-static/resources/view/homeproxy/client.js:1162
 msgid "System DNS"
 msgstr "系统 DNS"
+
+#: htdocs/luci-static/resources/view/homeproxy/node.js:1610
+msgid "ICMP"
+msgstr "ICMP"
+
+#: htdocs/luci-static/resources/view/homeproxy/node.js:1612
+msgid "Real Proxy"
+msgstr "真实代理"
 
 #: .github/tmp.3B2WlMxw6Y/luci-app-homeproxy/www/luci-static/resources/view/homeproxy/client.js:638
 #: .github/tmp.3B2WlMxw6Y/luci-app-homeproxy/www/luci-static/resources/view/homeproxy/client.js:949
@@ -8924,7 +8940,7 @@ msgstr "腾讯公共 DNS（119.29.29.29）"
 #: htdocs/luci-static/resources/view/homeproxy/node.js:473
 #: htdocs/luci-static/resources/view/homeproxy/node.js:602
 msgid "Test"
-msgstr ""
+msgstr "测试"
 
 #: .github/tmp.3B2WlMxw6Y/luci-app-homeproxy/www/luci-static/resources/view/homeproxy/client.js:510
 #: .github/tmp.5ZjF7otiBL/luci-app-homeproxy/www/luci-static/resources/view/homeproxy/client.js:510
