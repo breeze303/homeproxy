@@ -224,14 +224,10 @@ const methods = {
 				real_proxy_delay_timeout: 'real_proxy_delay_timeout',
 				real_proxy_delay_failed: 'real_proxy_delay_failed',
 				icmp_probe_unavailable: 'icmp_probe_unavailable',
-				tcp_probe_unavailable: 'tcp_probe_unavailable',
 				icmp_timeout: 'icmp_timeout',
-				tcp_timeout: 'tcp_timeout',
 				icmp_failed: 'icmp_failed',
-				tcp_failed: 'tcp_failed',
 				probe_timeout: 'probe_timeout',
 				backend_execution_failed: 'backend_execution_failed',
-				connection_failed: 'connection_failed',
 				probe_failed: 'probe_failed'
 			};
 			const probe_timeout_s = 3;
@@ -248,9 +244,7 @@ const methods = {
 				measured_at: time(),
 				error: err,
 				icmp_latency_ms: (extras && extras.icmp_latency_ms != null) ? extras.icmp_latency_ms : null,
-				tcp_latency_ms: (extras && extras.tcp_latency_ms != null) ? extras.tcp_latency_ms : null,
 				icmp_error: (extras && extras.icmp_error) ? extras.icmp_error : null,
-				tcp_error: (extras && extras.tcp_error) ? extras.tcp_error : null,
 				real_proxy_runtime: (extras && extras.real_proxy_runtime) ? extras.real_proxy_runtime : null
 			});
 
@@ -817,9 +811,12 @@ const methods = {
 				};
 			};
 
+			const normalizeLatencyMode = (m) => (m === 'tcp') ? 'icmp' : m;
 			const node = trim(req.args?.node || '') || null;
-			const mode = trim(req.args?.mode || '');
-			const allowed_modes = ['icmp', 'tcp', 'real_proxy'];
+			const requested_mode = trim(req.args?.mode || '');
+			const mode = normalizeLatencyMode(requested_mode);
+			const allowed_modes = ['icmp', 'real_proxy'];
+			const allowed_configured_modes = ['icmp', 'tcp', 'real_proxy'];
 			if (!node)
 				return formatResult(null, 'error', null, {
 					code: error_codes.invalid_node,
@@ -835,11 +832,12 @@ const methods = {
 			const uci = cursor();
 			uci.load('homeproxy');
 
-			const configured_mode = trim(uci.get('homeproxy', 'subscription', 'latency_test_mode') || '');
-			if (configured_mode && index(allowed_modes, configured_mode) === -1)
+			const configured_mode_raw = trim(uci.get('homeproxy', 'subscription', 'latency_test_mode') || '');
+			const configured_mode = normalizeLatencyMode(configured_mode_raw);
+			if (configured_mode_raw && index(allowed_configured_modes, configured_mode_raw) === -1)
 				return formatResult(node, 'error', null, {
 					code: error_codes.invalid_mode,
-					message: sprintf('configured latency test mode is invalid: %s', configured_mode || '(empty)')
+					message: sprintf('configured latency test mode is invalid: %s', configured_mode_raw || '(empty)')
 				});
 
 			if (configured_mode && configured_mode !== mode)
@@ -857,7 +855,6 @@ const methods = {
 
 			const address = trim(section.address || '');
 			const port = int(section.port || '0');
-			const port_str = sprintf('%d', port);
 			if (!address || port <= 0 || port > 65535)
 				return formatResult(node, 'error', null, {
 					code: error_codes.invalid_node,
@@ -947,7 +944,6 @@ const methods = {
 			}
 
 			const ping = access('/bin/ping') ? '/bin/ping' : (access('/usr/bin/ping') ? '/usr/bin/ping' : null);
-			const netcat = access('/usr/bin/nc') ? '/usr/bin/nc' : (access('/bin/nc') ? '/bin/nc' : null);
 
 			const runProbe = (command, timeout_ms) => {
 				const started_ms = monotonicMs();
@@ -960,135 +956,60 @@ const methods = {
 			};
 
 			let icmp_latency_ms = null;
-			let tcp_latency_ms = null;
 			let icmp_error = null;
-			let tcp_error = null;
 
-			if (mode === 'icmp') {
-				if (!ping) {
-					icmp_error = {
-						code: error_codes.icmp_probe_unavailable,
-						message: 'missing ping executable for ICMP probe'
-					};
-				}
-				else {
-					const result = runProbe(
-						`${ping} -c 1 -W ${probe_timeout_s} ${shellquote(address)} >/dev/null 2>/dev/null`,
-						probe_system_timeout_ms
-					);
-
-					if (result.probe_exit === 0)
-						icmp_latency_ms = (result.latency_ms !== null) ? result.latency_ms : 0;
-					else if (result.probe_exit === -1 || (result.latency_ms !== null && result.latency_ms >= probe_timeout_ms))
-						icmp_error = {
-							code: error_codes.icmp_timeout,
-							message: `ICMP ping timeout after ${probe_timeout_s}s`
-						};
-					else if (result.probe_exit === 127)
-						icmp_error = {
-							code: error_codes.backend_execution_failed,
-							message: 'ICMP ping command execution failed'
-						};
-					else
-						icmp_error = {
-							code: error_codes.icmp_failed,
-							message: `ICMP ping failed with exit code ${result.probe_exit}`
-						};
-				}
-
-				if (icmp_latency_ms !== null)
-					return formatResult(node, 'success', icmp_latency_ms, null, {
-						icmp_latency_ms,
-						tcp_latency_ms,
-						icmp_error,
-						tcp_error
-					});
-
-				if (icmp_error?.code === error_codes.icmp_timeout)
-					return formatResult(node, 'timeout', null, {
-						code: error_codes.probe_timeout,
-						message: `ICMP probe timed out after ${probe_timeout_s}s`
-					}, {
-						icmp_latency_ms,
-						tcp_latency_ms,
-						icmp_error,
-						tcp_error
-					});
-
-				return formatResult(node, 'error', null, icmp_error || {
-					code: error_codes.probe_failed,
-					message: 'ICMP probe failed'
-				}, {
-					icmp_latency_ms,
-					tcp_latency_ms,
-					icmp_error,
-					tcp_error
-				});
-			}
-
-			if (!netcat) {
-				tcp_error = {
-					code: error_codes.tcp_probe_unavailable,
-					message: 'missing netcat executable for TCP probe'
+			if (!ping) {
+				icmp_error = {
+					code: error_codes.icmp_probe_unavailable,
+					message: 'missing ping executable for ICMP probe'
 				};
 			}
 			else {
 				const result = runProbe(
-					`${netcat} -w ${probe_timeout_s} ${shellquote(address)} ${shellquote(port_str)} </dev/null >/dev/null 2>/dev/null`,
+					`${ping} -c 1 -W ${probe_timeout_s} ${shellquote(address)} >/dev/null 2>/dev/null`,
 					probe_system_timeout_ms
 				);
 
 				if (result.probe_exit === 0)
-					tcp_latency_ms = (result.latency_ms !== null) ? result.latency_ms : 0;
+					icmp_latency_ms = (result.latency_ms !== null) ? result.latency_ms : 0;
 				else if (result.probe_exit === -1 || (result.latency_ms !== null && result.latency_ms >= probe_timeout_ms))
-					tcp_error = {
-						code: error_codes.tcp_timeout,
-						message: `TCP ping timeout after ${probe_timeout_s}s`
+					icmp_error = {
+						code: error_codes.icmp_timeout,
+						message: `ICMP ping timeout after ${probe_timeout_s}s`
 					};
 				else if (result.probe_exit === 127)
-					tcp_error = {
+					icmp_error = {
 						code: error_codes.backend_execution_failed,
-						message: 'TCP ping command execution failed'
-					};
-				else if (result.probe_exit === 1)
-					tcp_error = {
-						code: error_codes.connection_failed,
-						message: `TCP connection probe failed with exit code ${result.probe_exit}`
+						message: 'ICMP ping command execution failed'
 					};
 				else
-					tcp_error = {
-						code: error_codes.tcp_failed,
-						message: `TCP ping failed with exit code ${result.probe_exit}`
+					icmp_error = {
+						code: error_codes.icmp_failed,
+						message: `ICMP ping failed with exit code ${result.probe_exit}`
 					};
 			}
 
-			if (tcp_latency_ms !== null)
-				return formatResult(node, 'success', tcp_latency_ms, null, {
+			if (icmp_latency_ms !== null)
+				return formatResult(node, 'success', icmp_latency_ms, null, {
 					icmp_latency_ms,
-					tcp_latency_ms,
-					icmp_error,
-					tcp_error
+					icmp_error
 				});
 
-			if (tcp_error?.code === error_codes.tcp_timeout)
+			if (icmp_error?.code === error_codes.icmp_timeout)
 				return formatResult(node, 'timeout', null, {
 					code: error_codes.probe_timeout,
-					message: `TCP probe timed out after ${probe_timeout_s}s`
+					message: `ICMP probe timed out after ${probe_timeout_s}s`
 				}, {
 					icmp_latency_ms,
-					tcp_latency_ms,
-					icmp_error,
-					tcp_error
+					icmp_error
 				});
 
-			return formatResult(node, 'error', null, tcp_error || {
+			return formatResult(node, 'error', null, icmp_error || {
 				code: error_codes.probe_failed,
-				message: 'TCP probe failed'
+				message: 'ICMP probe failed'
 			}, {
 				icmp_latency_ms,
-				tcp_latency_ms,
-				icmp_error,
-				tcp_error
+				icmp_error
 			});
 		}
 	},
