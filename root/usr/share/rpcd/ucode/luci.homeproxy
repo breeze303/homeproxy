@@ -21,6 +21,123 @@ function hasKernelModule(kmod) {
 
 const HP_DIR = '/etc/homeproxy';
 const RUN_DIR = '/var/run/homeproxy';
+const SINGBOX_UPDATE_SCRIPT = `${HP_DIR}/scripts/update_singbox.sh`;
+
+function toTrimmedStringOrNull(v) {
+	if (v === null || v === '')
+		return null;
+
+	const s = trim(sprintf('%s', v));
+
+	return s ? s : null;
+}
+
+function singboxUpdateError(mode, code, detail) {
+	if (mode === 'check')
+		return {
+			ok: false,
+			code,
+			installed_version: null,
+			candidate_version: null,
+			release_tag: null,
+			release_url: null,
+			asset_name: null,
+			arch: null,
+			detail
+		};
+
+	if (mode === 'start')
+		return {
+			ok: false,
+			code,
+			job_id: null,
+			installed_version: null,
+			candidate_version: null,
+			detail
+		};
+
+	return {
+		ok: false,
+		code,
+		phase: null,
+		installed_version: null,
+		candidate_version: null,
+		detail,
+		updated_at: null
+	};
+}
+
+function normalizeSingboxUpdateResponse(raw, mode) {
+	let data = null;
+
+	if (type(raw) === 'string' && trim(raw) !== '') {
+		try {
+			data = json(raw);
+		} catch (e) {}
+	}
+
+	if (type(data) !== 'object')
+		data = {};
+
+	const code = toTrimmedStringOrNull(data?.code) || 'backend_invalid_response';
+	const detail = toTrimmedStringOrNull(data?.detail) || 'sing-box updater returned malformed response';
+	const installed_version = toTrimmedStringOrNull(data?.installed_version);
+	const candidate_version = toTrimmedStringOrNull(data?.candidate_version);
+
+	if (mode === 'check')
+		return {
+			ok: (data?.ok === true),
+			code,
+			installed_version,
+			candidate_version,
+			release_tag: toTrimmedStringOrNull(data?.release_tag),
+			release_url: toTrimmedStringOrNull(data?.release_url),
+			asset_name: toTrimmedStringOrNull(data?.asset_name),
+			arch: toTrimmedStringOrNull(data?.arch),
+			detail
+		};
+
+	if (mode === 'start')
+		return {
+			ok: (data?.ok === true),
+			code,
+			job_id: (code === 'started') ? 'singbox-update' : null,
+			installed_version,
+			candidate_version,
+			detail
+		};
+
+	const updated_at = int(data?.updated_at || '0');
+	return {
+		ok: (data?.ok === true),
+		code,
+		phase: toTrimmedStringOrNull(data?.phase),
+		installed_version,
+		candidate_version,
+		detail,
+		updated_at: (updated_at > 0) ? updated_at : null
+	};
+}
+
+function runSingboxUpdater(mode) {
+	if (!access(SINGBOX_UPDATE_SCRIPT))
+		return singboxUpdateError(mode, 'tool_missing', 'sing-box updater script is missing');
+
+	const action = (mode in ['check', 'start', 'status']) ? mode : null;
+	if (!action)
+		return singboxUpdateError(mode, 'invalid_request', 'unsupported updater RPC mode');
+
+	const fd = popen(`${shellquote(SINGBOX_UPDATE_SCRIPT)} ${action}`);
+	if (!fd)
+		return singboxUpdateError(mode, 'backend_execution_failed', 'failed to execute sing-box updater script');
+
+	let payload = '', line;
+	for (line = fd.read('line'); line !== null && line !== ''; line = fd.read('line'))
+		payload += line;
+	fd.close();
+
+	return normalizeSingboxUpdateResponse(payload, mode);
+}
 
 const methods = {
 	acllist_read: {
@@ -1101,6 +1218,24 @@ const methods = {
 			features.hp_has_tun = hasKernelModule('tun.ko') || access('/etc/modules.d/30-tun');
 
 			return features;
+		}
+	},
+
+	singbox_update_check: {
+		call: function() {
+			return runSingboxUpdater('check');
+		}
+	},
+
+	singbox_update_start: {
+		call: function() {
+			return runSingboxUpdater('start');
+		}
+	},
+
+	singbox_update_status: {
+		call: function() {
+			return runSingboxUpdater('status');
 		}
 	},
 
