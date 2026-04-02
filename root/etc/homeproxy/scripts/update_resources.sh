@@ -4,6 +4,7 @@
 # Copyright (C) 2022-2025 ImmortalWrt.org
 
 NAME="homeproxy"
+FETCH_BACKEND=""
 
 RESOURCES_DIR="/etc/$NAME/resources"
 mkdir -p "$RESOURCES_DIR"
@@ -20,6 +21,67 @@ to_upper() {
 	echo -e "$1" | tr "[a-z]" "[A-Z]"
 }
 
+init_fetch_backend() {
+	if [ -n "$FETCH_BACKEND" ]; then
+		return 0
+	fi
+
+	if command -v uclient-fetch >/dev/null 2>&1; then
+		FETCH_BACKEND="uclient-fetch"
+		return 0
+	fi
+
+	if command -v wget >/dev/null 2>&1; then
+		FETCH_BACKEND="wget"
+		return 0
+	fi
+
+	return 1
+}
+
+fetch_stdout() {
+	local url="$1"
+	local timeout="$2"
+	local header="$3"
+
+	if [ "$FETCH_BACKEND" = "uclient-fetch" ]; then
+		if [ -n "$header" ]; then
+			uclient-fetch -q -T "$timeout" -H "$header" -O - "$url" 2>/dev/null
+		else
+			uclient-fetch -q -T "$timeout" -O - "$url" 2>/dev/null
+		fi
+		return $?
+	fi
+
+	if [ -n "$header" ]; then
+		wget --timeout="$timeout" -q --header="$header" -O- "$url" 2>/dev/null
+	else
+		wget --timeout="$timeout" -q -O- "$url" 2>/dev/null
+	fi
+}
+
+fetch_file() {
+	local url="$1"
+	local output="$2"
+	local timeout="$3"
+	local header="$4"
+
+	if [ "$FETCH_BACKEND" = "uclient-fetch" ]; then
+		if [ -n "$header" ]; then
+			uclient-fetch -q -T "$timeout" -H "$header" -O "$output" "$url" 2>/dev/null
+		else
+			uclient-fetch -q -T "$timeout" -O "$output" "$url" 2>/dev/null
+		fi
+		return $?
+	fi
+
+	if [ -n "$header" ]; then
+		wget --timeout="$timeout" -q --header="$header" -O "$output" "$url" 2>/dev/null
+	else
+		wget --timeout="$timeout" -q -O "$output" "$url" 2>/dev/null
+	fi
+}
+
 check_list_update() {
 	local listtype="$1"
 	local listrepo="$2"
@@ -27,7 +89,7 @@ check_list_update() {
 	local listname="$4"
 	local lock="$RUN_DIR/update_resources-$listtype.lock"
 	local github_token="$(uci -q get homeproxy.config.github_token)"
-	local wget="wget --timeout=10 -q"
+	local token_header=""
 
 	exec 200>"$lock"
 	if ! flock -n 200 &> "/dev/null"; then
@@ -35,8 +97,18 @@ check_list_update() {
 		return 2
 	fi
 
-	[ -z "$github_token" ] || github_token="--header=Authorization: Bearer $github_token"
-	local list_info="$($wget "${github_token:--q}" -O- "https://api.github.com/repos/$listrepo/commits?sha=$listref&path=$listname&per_page=1")"
+	if ! init_fetch_backend; then
+		log "[$(to_upper "$listtype")] No compatible fetch backend found (uclient-fetch/wget)."
+		return 1
+	fi
+
+	[ -z "$github_token" ] || token_header="Authorization: Bearer $github_token"
+	local list_info
+	if ! list_info="$(fetch_stdout "https://api.github.com/repos/$listrepo/commits?sha=$listref&path=$listname&per_page=1" 10 "$token_header")" || [ -z "$list_info" ]; then
+		log "[$(to_upper "$listtype")] Failed to get the latest version, please retry later."
+		return 1
+	fi
+
 	local list_sha="$(echo -e "$list_info" | jsonfilter -qe "@[0].sha")"
 	local list_ver="$(echo -e "$list_info" | jsonfilter -qe "@[0].commit.message" | grep -Eo "[0-9-]+" | tr -d '-')"
 	if [ -z "$list_sha" ] || [ -z "$list_ver" ]; then
@@ -53,7 +125,7 @@ check_list_update() {
 		log "[$(to_upper "$listtype")] Local version: $local_list_ver, latest version: $list_ver."
 	fi
 
-	if ! $wget "https://fastly.jsdelivr.net/gh/$listrepo@$list_sha/$listname" -O "$RUN_DIR/$listname" || [ ! -s "$RUN_DIR/$listname" ]; then
+	if ! fetch_file "https://fastly.jsdelivr.net/gh/$listrepo@$list_sha/$listname" "$RUN_DIR/$listname" 10 || [ ! -s "$RUN_DIR/$listname" ]; then
 		rm -f "$RUN_DIR/$listname"
 		log "[$(to_upper "$listtype")] Update failed."
 		return 1
