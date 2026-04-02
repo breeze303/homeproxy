@@ -27,6 +27,41 @@ log() {
 	echo -e "$(date "+%Y-%m-%d %H:%M:%S") [DAEMON] $*" >> "$LOG_PATH"
 }
 
+validate_runtime_configs() {
+	local outbound_node="$1"
+	local server_enabled="$2"
+
+	mkdir -p "$RUN_DIR"
+
+	if [ "$outbound_node" != "nil" ]; then
+		# Generate/Validate client config
+		ucode -S "$HP_DIR/scripts/generate_client.uc" 2>>"$LOG_PATH"
+
+		if [ ! -e "$RUN_DIR/sing-box-c.json" ]; then
+			log "Error: failed to generate client configuration."
+			return 1
+		elif ! "$PROG" check --config "$RUN_DIR/sing-box-c.json" 2>>"$LOG_PATH"; then
+			log "Error: wrong client configuration detected."
+			return 1
+		fi
+	fi
+
+	if [ "$server_enabled" = "1" ]; then
+		# Generate/Validate server config
+		ucode -S "$HP_DIR/scripts/generate_server.uc" 2>>"$LOG_PATH"
+
+		if [ ! -e "$RUN_DIR/sing-box-s.json" ]; then
+			log "Error: failed to generate server configuration."
+			return 1
+		elif ! "$PROG" check --config "$RUN_DIR/sing-box-s.json" 2>>"$LOG_PATH"; then
+			log "Error: wrong server configuration detected."
+			return 1
+		fi
+	fi
+
+	return 0
+}
+
 start_service() {
 	config_load "$CONF"
 
@@ -48,19 +83,11 @@ start_service() {
 		return 1
 	fi
 
-	mkdir -p "$RUN_DIR"
+	if ! validate_runtime_configs "$outbound_node" "$server_enabled"; then
+		return 1
+	fi
 
 	if [ "$outbound_node" != "nil" ]; then
-		# Generate/Validate client config
-		ucode -S "$HP_DIR/scripts/generate_client.uc" 2>>"$LOG_PATH"
-
-		if [ ! -e "$RUN_DIR/sing-box-c.json" ]; then
-			log "Error: failed to generate client configuration."
-			return 1
-		elif ! "$PROG" check --config "$RUN_DIR/sing-box-c.json" 2>>"$LOG_PATH"; then
-			log "Error: wrong client configuration detected."
-			return 1
-		fi
 
 		# Auto update
 		local auto_update auto_update_time
@@ -176,17 +203,6 @@ start_service() {
 	fi
 
 	if [ "$server_enabled" = "1" ]; then
-		# Generate/Validate server config
-		ucode -S "$HP_DIR/scripts/generate_server.uc" 2>>"$LOG_PATH"
-
-		if [ ! -e "$RUN_DIR/sing-box-s.json" ]; then
-			log "Error: failed to generate server configuration."
-			return 1
-		elif ! "$PROG" check --config "$RUN_DIR/sing-box-s.json" 2>>"$LOG_PATH"; then
-			log "Error: wrong server configuration detected."
-			return 1
-		fi
-
 		# sing-box (server)
 		procd_open_instance "sing-box-s"
 
@@ -331,6 +347,29 @@ reload_service() {
 	stop
 	start
 }
+
+validate() {
+	config_load "$CONF"
+
+	local routing_mode outbound_node server_enabled
+	config_get routing_mode "config" "routing_mode" "bypass_mainland_china"
+	if [ "$routing_mode" != "custom" ]; then
+		config_get outbound_node "config" "main_node" "nil"
+	else
+		config_get outbound_node "routing" "default_outbound" "nil"
+	fi
+	config_get_bool server_enabled "server" "enabled" "0"
+
+	if [ "$outbound_node" = "nil" ] && [ "$server_enabled" = "0" ]; then
+		log "Error: both client and server are disabled."
+		return 1
+	fi
+
+	validate_runtime_configs "$outbound_node" "$server_enabled"
+}
+
+EXTRA_COMMANDS="validate"
+EXTRA_HELP="\n\tvalidate\tValidate generated sing-box runtime configs"
 
 service_triggers() {
 	procd_add_reload_trigger "$CONF"
